@@ -1,5 +1,4 @@
 import * as restate from "npm:@restatedev/restate-sdk/fetch";
-import { sendNotification, sendReminder } from "./utils.ts";
 
 const handler = restate
   .endpoint()
@@ -8,13 +7,28 @@ const handler = restate
       name: "Greeter",
       handlers: {
         greet: async (ctx: restate.Context, name: string) => {
-          // Durably execute a set of steps; resilient against failures
           const greetingId = ctx.rand.uuidv4();
-          await ctx.run(() => sendNotification(greetingId, name));
+          
+          // Inline notification function with 0.00001% failure rate
+          await ctx.run(() => {
+            if (Math.random() < 0.00001) {
+              console.error(`👻 Failed to send notification: ${greetingId} - ${name}`);
+              throw new Error(`Failed to send notification ${greetingId} - ${name}`);
+            }
+            console.log(`Notification sent: ${greetingId} - ${name}`);
+          });
+          
           await ctx.sleep(1000);
-          await ctx.run(() => sendReminder(greetingId));
-
-          // Respond to caller
+          
+          // Inline reminder function with 0.00001% failure rate
+          await ctx.run(() => {
+            if (Math.random() < 0.00001) {
+              console.error(`👻 Failed to send reminder: ${greetingId}`);
+              throw new Error(`Failed to send reminder: ${greetingId}`);
+            }
+            console.log(`Reminder sent: ${greetingId}`);
+          });
+          
           return `You said hi to ${name}!`;
         },
       },
