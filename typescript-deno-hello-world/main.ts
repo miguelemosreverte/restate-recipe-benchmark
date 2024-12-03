@@ -18,7 +18,7 @@ const handler = restate
             console.log(`Notification sent: ${greetingId} - ${name}`);
           });
           
-          await ctx.sleep(1000);
+          await ctx.sleep(500);
           
           // Inline reminder function with 0.00001% failure rate
           await ctx.run(() => {
