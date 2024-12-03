@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Restate Benchmark Metrics</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <meta http-equiv="refresh" content="1">
+</head>
+<body class="bg-gray-50 p-6">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-2xl font-bold mb-6">Live Metrics</h1>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">TPS</h2>
+                <p class="text-2xl font-semibold">{{printf "%.2f" .TPS}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">Current Users</h2>
+                <p class="text-2xl font-semibold">{{.CurrentUsers}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">Failure Rate</h2>
+                <p class="text-2xl font-semibold">{{printf "%.2f%%" .FailureRate}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">CPU Usage</h2>
+                <p class="text-2xl font-semibold">{{printf "%.1f%%" (or .SystemMetrics.CPUUsage 0.0)}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">Memory Usage</h2>
+                <p class="text-2xl font-semibold">{{printf "%.1f%%" (or .SystemMetrics.MemoryUsage 0.0)}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">Disk Usage</h2>
+                <p class="text-2xl font-semibold">{{if ge .SystemMetrics.DiskUsage 0.0}}{{printf "%.2f GB" .SystemMetrics.DiskUsage}}{{else}}N/A{{end}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">IOPS</h2>
+                <p class="text-2xl font-semibold">{{printf "%.0f" (or .SystemMetrics.DiskIOPS 0.0)}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">Pending Retries</h2>
+                <p class="text-2xl font-semibold">{{.InFlightRetries}}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-gray-500 text-sm">Total Requests</h2>
+                <p class="text-2xl font-semibold">{{.SuccessRequests}}</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

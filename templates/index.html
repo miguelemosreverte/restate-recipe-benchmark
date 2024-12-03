@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Restate Benchmark Report</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold mb-8">Restate Benchmark Results</h1>
+        
+        <div class="bg-yellow-100 border-l-4 border-yellow-500 p-4 mb-8">
+            <p class="font-bold">Recommended Configuration</p>
+            <p>Maximum Stable TPS: {{printf "%.2f" .RecommendedTPS}}</p>
+            <p>Recommended Concurrent Users: {{.RecommendedUsers}}</p>
+            <p>Hardware Requirements:</p>
+            <ul class="list-disc ml-5">
+                <li>CPU: {{printf "%.1f%%" .MaxCPU}}% utilization</li>
+                <li>Memory: {{printf "%.1f" .MaxMemory}}GB</li>
+                <li>Disk I/O: {{.MaxDiskIO}} operations/sec</li>
+            </ul>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <!-- ... metrics cards ... -->
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-xl font-semibold mb-4">Performance Timeline</h2>
+                <div id="tpsChart" class="h-80"></div>
+            </div>
+            
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-xl font-semibold mb-4">System CPU & Memory</h2>
+                <div id="systemChart" class="h-80"></div>
+            </div>
+
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-xl font-semibold mb-4">Disk Operations</h2>
+                <div id="diskChart" class="h-80"></div>
+            </div>
+
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-xl font-semibold mb-4">Retry Debt</h2>
+                <div id="retryChart" class="h-80"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // TPS Timeline with Retry Debt
+        const tpsData = [{
+            x: {{.Timestamps}},
+            y: {{.TPSValues}},
+            name: 'TPS',
+            type: 'scatter'
+        }];
+        
+        Plotly.newPlot('tpsChart', tpsData, {
+            title: 'Transactions Per Second',
+            yaxis: { title: 'TPS' }
+        });
+
+        // System Metrics
+        const systemData = [{
+            x: {{.Timestamps}},
+            y: {{.CPUValues}},
+            name: 'CPU %',
+            type: 'scatter'
+        }, {
+            x: {{.Timestamps}},
+            y: {{.MemoryValues}},
+            name: 'Memory %',
+            type: 'scatter'
+        }];
+
+        Plotly.newPlot('systemChart', systemData, {
+            title: 'System Resource Usage',
+            yaxis: { title: '%' }
+        });
+
+        // Disk Operations
+        const diskData = [{
+            x: {{.Timestamps}},
+            y: {{.DiskReadValues}},
+            name: 'Reads/s',
+            type: 'scatter'
+        }, {
+            x: {{.Timestamps}},
+            y: {{.DiskWriteValues}},
+            name: 'Writes/s',
+            type: 'scatter'
+        }];
+
+        Plotly.newPlot('diskChart', diskData, {
+            title: 'Disk Operations',
+            yaxis: { title: 'Operations/s' }
+        });
+
+        // Retry Debt
+        const retryData = [{
+            x: {{.Timestamps}},
+            y: {{.RetryDebtValues}},
+            name: 'Retry Debt',
+            type: 'scatter'
+        }];
+
+        Plotly.newPlot('retryChart', retryData, {
+            title: 'Retry Debt Over Time',
+            yaxis: { title: 'Outstanding Retries' }
+        });
+    </script>
+</body>
+</html>
