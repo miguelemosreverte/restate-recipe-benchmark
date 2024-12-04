@@ -42,3 +42,7 @@ ls -t reports/benchmark-report-*.html | head -n 1 | xargs -I {} mv {} index.html
 ```
 python publishReports.py
 ```
+
+```
+brew install wrk
+```
