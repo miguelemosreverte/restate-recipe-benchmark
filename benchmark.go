@@ -11,7 +11,6 @@ import (
     "log"
     "net/http"
     "os"
-    "math"
     "path/filepath"
     "sync"
     "sync/atomic"
@@ -214,134 +213,89 @@ func metricsHtmlHandler(state *BenchmarkState) http.HandlerFunc {
 }
 
 func runBenchmark(state *BenchmarkState) {
-    benchmarkTimeout := time.After(60 * time.Minute) // Extended for fine-tuning
-    maxTotalIterations := 10
+    benchmarkTimeout := time.After(60 * time.Minute)
     currentIteration := 0
-    
-    state.cooldownPeriod = time.Second * 5  
-    state.maxInFlightRetries = 20
-    state.minUsers = 5
-    state.startingUsers = 20
-    state.maxUsers = 100
+    maxTotalIterations := 50
+    targetTPS := 10000.0 // Target TPS
 
+    state.cooldownPeriod = time.Second * 5
+    state.startingUsers = 20
+    state.maxUsers = 20000
     state.currentUsers = state.startingUsers
     state.isRunning = true
     state.startTime = time.Now()
+
     state.metrics = make([]Metrics, 0)
 
-    ticker := time.NewTicker(time.Second)
-    defer ticker.Stop()
+    log.Printf("Benchmark initialized with target TPS: %.2f, max users: %d, cooldown period: %v", targetTPS, state.maxUsers, state.cooldownPeriod)
 
-    diskInfo, err := disk.Usage(state.restateDataPath)
-    if err != nil {
-        log.Printf("Warning: Could not get initial disk usage: %v", err)
-    } else {
-        state.diskUsageStart = diskInfo.Used
-    }
+    bestTPS := 0.0
+    bestUsers := state.startingUsers
+    stableUsers := state.startingUsers
+    unstableUsers := state.maxUsers
 
-    log.Printf("Monitoring Restate data at: %s\n", state.restateDataPath)
-    log.Printf("Initial disk usage: %d bytes\n", state.diskUsageStart)
-
-    // Search variables
-    bestStableUsers := state.minUsers
-    bestStableTPS := 0.0
-    lastStableUsers := 0
-    firstUnstableUsers := 0
-    const minSamplesNeeded = 3    
-    const tpsVarianceThreshold = 0.1 
-
-    // Run initial binary search phase
-    searchPhase: for state.isRunning {
+    for state.isRunning {
         select {
         case <-benchmarkTimeout:
-            log.Printf("Benchmark timeout reached")
-            goto fineTuning
+            log.Printf("Benchmark timeout reached. Exiting...")
+            state.isRunning = false
+            break
         default:
         }
 
-        currentIteration++
-        if currentIteration > maxTotalIterations {
-            log.Printf("Reached maximum iterations (%d)", maxTotalIterations)
-            goto fineTuning
+        if currentIteration >= maxTotalIterations {
+            log.Printf("Maximum iterations reached. Exiting...")
+            break
         }
 
-        log.Printf("Starting test iteration with %d users", state.currentUsers)
-        
+        currentIteration++
+
+        log.Printf("Starting iteration %d with %d users", currentIteration, state.currentUsers)
         iterationStopCh := make(chan bool)
         var iterationWg sync.WaitGroup
-        recentTPS := make([]float64, 0, minSamplesNeeded)
 
-        // Reset counters
         state.successRequests.Store(0)
         state.failedRequests.Store(0)
         state.inFlightRetries.Store(0)
         state.startTime = time.Now()
 
-        // Start workers
         for i := 0; i < state.currentUsers; i++ {
             iterationWg.Add(1)
             go worker(state, iterationStopCh, &iterationWg)
         }
 
-        // Monitor performance
-        isStable := false
-        var currentAvgTPS float64
-        maxTestDuration := 10 * time.Second
-        testStart := time.Now()
-        testTicker := time.NewTicker(time.Second)
         monitoringDone := make(chan bool)
+        recentTPS := make([]float64, 0, 5)
+        testDuration := time.Second * 15
 
         go func() {
             defer close(monitoringDone)
-            for time.Since(testStart) < maxTestDuration {
-                select {
-                case <-testTicker.C:
-                    state.recordMetrics()
+            testStart := time.Now()
+            ticker := time.NewTicker(time.Second)
 
-                    state.mutex.RLock()
-                    metrics := state.metrics[len(state.metrics)-1]
-                    state.mutex.RUnlock()
+            for time.Since(testStart) < testDuration {
+                <-ticker.C
+                state.recordMetrics()
 
-                    currentTPS := metrics.TPS
-                    log.Printf("TPS: %.2f, In-flight Retries: %d, Users: %d",
-                        currentTPS, metrics.InFlightRetries, state.currentUsers)
+                state.mutex.RLock()
+                metrics := state.metrics[len(state.metrics)-1]
+                state.mutex.RUnlock()
 
-                    if metrics.InFlightRetries > 0 {
-                        isStable = false
-                        return
-                    }
+                log.Printf("TPS: %.2f, Timeouts: %d, Users: %d", metrics.TPS, metrics.InFlightRetries, state.currentUsers)
 
-                    if currentTPS > 0 {
-                        recentTPS = append(recentTPS, currentTPS)
-                        if len(recentTPS) >= minSamplesNeeded {
-                            if len(recentTPS) > minSamplesNeeded {
-                                recentTPS = recentTPS[1:]
-                            }
-                            
-                            avg := 0.0
-                            for _, tps := range recentTPS {
-                                avg += tps
-                            }
-                            avg /= float64(len(recentTPS))
-                            currentAvgTPS = avg
-                            
-                            isStable = true
-                            for _, tps := range recentTPS {
-                                if math.Abs(tps-avg)/avg > tpsVarianceThreshold {
-                                    isStable = false
-                                    break
-                                }
-                            }
-                        }
+                if metrics.TPS > 0 {
+                    recentTPS = append(recentTPS, metrics.TPS)
+                    if len(recentTPS) > 5 {
+                        recentTPS = recentTPS[1:]
                     }
                 }
             }
+
+            ticker.Stop()
         }()
 
         <-monitoringDone
-        testTicker.Stop()
 
-        // Clean up workers
         close(iterationStopCh)
         cleanup := make(chan bool)
         go func() {
@@ -355,182 +309,55 @@ func runBenchmark(state *BenchmarkState) {
             log.Printf("Worker cleanup timed out")
         }
 
-        time.Sleep(state.cooldownPeriod)
+        avgTPS := 0.0
+        for _, tps := range recentTPS {
+            avgTPS += tps
+        }
+        if len(recentTPS) > 0 {
+            avgTPS /= float64(len(recentTPS))
+        }
 
-        if isStable {
-            log.Printf("Test was stable with TPS %.2f", currentAvgTPS)
-            lastStableUsers = state.currentUsers
-            if currentAvgTPS > bestStableTPS {
-                bestStableTPS = currentAvgTPS
-                bestStableUsers = state.currentUsers
-                log.Printf("New best configuration found!")
-            }
-            
-            nextUsers := state.currentUsers * 2
-            log.Printf("Doubling users from %d to %d", state.currentUsers, nextUsers)
-            state.currentUsers = nextUsers
+        timeoutRate := float64(state.failedRequests.Load()) / float64(state.successRequests.Load()+state.failedRequests.Load())
+
+        log.Printf("Iteration %d complete. Avg TPS: %.2f, Timeout Rate: %.2f", currentIteration, avgTPS, timeoutRate)
+
+        if avgTPS > bestTPS {
+            bestTPS = avgTPS
+            bestUsers = state.currentUsers
+            log.Printf("New best configuration: %d users, %.2f TPS", bestUsers, bestTPS)
+        }
+
+        if avgTPS >= targetTPS {
+            log.Printf("Target TPS %.2f achieved with %d users!", targetTPS, state.currentUsers)
+            break
+        }
+
+        if timeoutRate > 0.5 {
+            log.Printf("High timeout rate detected (%.2f). Marking %d users as unstable.", timeoutRate, state.currentUsers)
+            unstableUsers = state.currentUsers
         } else {
-            log.Printf("Test was unstable")
-            firstUnstableUsers = state.currentUsers
-            if lastStableUsers > 0 {
-                log.Printf("Found bounds: %d (stable) to %d (unstable)", 
-                    lastStableUsers, firstUnstableUsers)
-                break searchPhase
-            }
-            
-            state.currentUsers = int(float64(state.currentUsers) * 0.75)
+            log.Printf("Stable configuration detected at %d users.", state.currentUsers)
+            stableUsers = state.currentUsers
         }
+
+        // Binary search for convergence
+        if unstableUsers > stableUsers+1 {
+            state.currentUsers = (stableUsers + unstableUsers) / 2
+            log.Printf("Adjusting users to midpoint: %d", state.currentUsers)
+        } else {
+            log.Printf("Converged to optimal configuration: %d users, %.2f TPS", bestUsers, bestTPS)
+            break
+        }
+
+        time.Sleep(state.cooldownPeriod)
     }
 
-fineTuning:
-    if lastStableUsers > 0 && firstUnstableUsers > 0 {
-        log.Printf("Starting fine-tuning phase between %d and %d users", 
-            lastStableUsers, firstUnstableUsers)
-
-        // Two fine-tuning attempts
-        for attempt := 1; attempt <= 2; attempt++ {
-            candidateUsers := (lastStableUsers + firstUnstableUsers) / 2
-            state.currentUsers = candidateUsers
-            log.Printf("Fine-tuning attempt %d/2 with %d users", attempt, candidateUsers)
-
-            // Run test with same monitoring logic as above
-            iterationStopCh := make(chan bool)
-            var iterationWg sync.WaitGroup
-            recentTPS := make([]float64, 0, minSamplesNeeded)
-            
-            state.successRequests.Store(0)
-            state.failedRequests.Store(0)
-            state.inFlightRetries.Store(0)
-            state.startTime = time.Now()
-
-            for i := 0; i < state.currentUsers; i++ {
-                iterationWg.Add(1)
-                go worker(state, iterationStopCh, &iterationWg)
-            }
-
-            isStable := false
-            var currentAvgTPS float64
-            testStart := time.Now()
-            testTicker := time.NewTicker(time.Second)
-            monitoringDone := make(chan bool)
-
-            go func() {
-                defer close(monitoringDone)
-                for time.Since(testStart) < 30*time.Second { // Longer test for fine-tuning
-                    select {
-                    case <-testTicker.C:
-                        state.recordMetrics()
-
-                        state.mutex.RLock()
-                        metrics := state.metrics[len(state.metrics)-1]
-                        state.mutex.RUnlock()
-
-                        currentTPS := metrics.TPS
-                        log.Printf("Fine-tuning TPS: %.2f, Retries: %d, Users: %d",
-                            currentTPS, metrics.InFlightRetries, state.currentUsers)
-
-                        if metrics.InFlightRetries > 0 {
-                            isStable = false
-                            return
-                        }
-
-                        if currentTPS > 0 {
-                            recentTPS = append(recentTPS, currentTPS)
-                            if len(recentTPS) >= minSamplesNeeded {
-                                if len(recentTPS) > minSamplesNeeded {
-                                    recentTPS = recentTPS[1:]
-                                }
-                                
-                                avg := 0.0
-                                for _, tps := range recentTPS {
-                                    avg += tps
-                                }
-                                avg /= float64(len(recentTPS))
-                                currentAvgTPS = avg
-                                
-                                isStable = true
-                                for _, tps := range recentTPS {
-                                    if math.Abs(tps-avg)/avg > tpsVarianceThreshold {
-                                        isStable = false
-                                        break
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }()
-
-            <-monitoringDone
-            testTicker.Stop()
-            close(iterationStopCh)
-            cleanup := make(chan bool)
-            go func() {
-                iterationWg.Wait()
-                cleanup <- true
-            }()
-
-            select {
-            case <-cleanup:
-            case <-time.After(10 * time.Second):
-                log.Printf("Fine-tuning worker cleanup timed out")
-            }
-
-            time.Sleep(state.cooldownPeriod)
-
-            if isStable {
-                if currentAvgTPS > bestStableTPS {
-                    bestStableTPS = currentAvgTPS
-                    bestStableUsers = state.currentUsers
-                    log.Printf("New best configuration in fine-tuning: %d users at %.2f TPS",
-                        bestStableUsers, bestStableTPS)
-                }
-                lastStableUsers = candidateUsers
-            } else {
-                firstUnstableUsers = candidateUsers
-            }
-        }
-
-        // Final 5-minute stability demonstration
-        log.Printf("Running final 5-minute stability test with %d users", bestStableUsers)
-        state.currentUsers = bestStableUsers
-        
-        iterationStopCh := make(chan bool)
-        var iterationWg sync.WaitGroup
-        
-        state.successRequests.Store(0)
-        state.failedRequests.Store(0)
-        state.inFlightRetries.Store(0)
-        state.startTime = time.Now()
-
-        for i := 0; i < state.currentUsers; i++ {
-            iterationWg.Add(1)
-            go worker(state, iterationStopCh, &iterationWg)
-        }
-
-        finalTestStart := time.Now()
-        finalTestTicker := time.NewTicker(time.Second)
-        for time.Since(finalTestStart) < 5*time.Minute {
-            select {
-            case <-finalTestTicker.C:
-                state.recordMetrics()
-                state.mutex.RLock()
-                metrics := state.metrics[len(state.metrics)-1]
-                state.mutex.RUnlock()
-                log.Printf("Final stability test - TPS: %.2f, Retries: %d",
-                    metrics.TPS, metrics.InFlightRetries)
-            }
-        }
-        
-        finalTestTicker.Stop()
-        close(iterationStopCh)
-        iterationWg.Wait()
-    }
-
-    log.Printf("Benchmark complete. Final configuration: %d users, %.2f TPS", 
-        bestStableUsers, bestStableTPS)
+    log.Printf("Benchmark completed. Best configuration: %d users, %.2f TPS", bestUsers, bestTPS)
     generateReport(state)
 }
+
+
+
 
 func generateReport(state *BenchmarkState) {
     if err := os.MkdirAll("reports", 0755); err != nil {
